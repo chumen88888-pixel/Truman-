@@ -155,6 +155,15 @@ def ob_from_mesh(name, me, mat=None):
     return ob
 
 
+def uv_plane():
+    """Unit quad in XY with a 0-1 UV map, so billboards show the picture."""
+    verts = [(-0.5, -0.5, 0.0), (0.5, -0.5, 0.0), (0.5, 0.5, 0.0), (-0.5, 0.5, 0.0)]
+    uvs = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+    me = new_mesh("UVPlane", verts, [(0, 1, 2, 3)], uvs)
+    shade_flat(me)
+    return me
+
+
 def shade_flat(me):
     for p in me.polygons:
         p.use_smooth = False
@@ -313,49 +322,118 @@ def glass_mat():
 
 
 def road_mat():
+    """Wet asphalt: a dark floor, a few lengthwise neon reflections, dashed lanes.
+
+    UV.x runs across the road, UV.y along it. Streaks stay thin so the street
+    reads as pavement, not a wall of light.
+    """
     mat = fresh("Road")
     nt = mat.node_tree
     n, l = nt.nodes, nt.links
     tc = n.new("ShaderNodeTexCoord")
     sp = n.new("ShaderNodeSeparateXYZ")
     l.new(tc.outputs["UV"], sp.inputs[0])
-    mu = n.new("ShaderNodeMath")
-    mu.operation = "MULTIPLY"
-    mu.inputs[1].default_value = 52.0
-    l.new(sp.outputs["X"], mu.inputs[0])
-    sn = n.new("ShaderNodeMath")
-    sn.operation = "SINE"
-    l.new(mu.outputs[0], sn.inputs[0])
-    ab = n.new("ShaderNodeMath")
-    ab.operation = "ABSOLUTE"
-    l.new(sn.outputs[0], ab.inputs[0])
-    pw = n.new("ShaderNodeMath")
-    pw.operation = "POWER"
-    pw.inputs[1].default_value = 18.0
-    l.new(ab.outputs[0], pw.inputs[0])
-    # Color bands along the road.
-    mv = n.new("ShaderNodeMath")
-    mv.operation = "MULTIPLY"
-    mv.inputs[1].default_value = 0.12
-    l.new(sp.outputs["Y"], mv.inputs[0])
+
+    scaled = n.new("ShaderNodeMath")
+    scaled.operation = "MULTIPLY"
+    scaled.inputs[1].default_value = 7.0
+    l.new(sp.outputs["X"], scaled.inputs[0])
+    cell = n.new("ShaderNodeMath")
+    cell.operation = "FRACT"
+    l.new(scaled.outputs[0], cell.inputs[0])
+    centered = n.new("ShaderNodeMath")
+    centered.operation = "SUBTRACT"
+    centered.inputs[1].default_value = 0.5
+    l.new(cell.outputs[0], centered.inputs[0])
+    ad = n.new("ShaderNodeMath")
+    ad.operation = "ABSOLUTE"
+    l.new(centered.outputs[0], ad.inputs[0])
+    band = n.new("ShaderNodeMapRange")
+    band.clamp = True
+    band.inputs[1].default_value = 0.015
+    band.inputs[2].default_value = 0.055
+    band.inputs[3].default_value = 1.0
+    band.inputs[4].default_value = 0.0
+    l.new(ad.outputs[0], band.inputs[0])
+
+    fl = n.new("ShaderNodeMath")
+    fl.operation = "FLOOR"
+    l.new(scaled.outputs[0], fl.inputs[0])
+    ph = n.new("ShaderNodeMath")
+    ph.operation = "MULTIPLY"
+    ph.inputs[1].default_value = 0.37
+    l.new(fl.outputs[0], ph.inputs[0])
     fr = n.new("ShaderNodeMath")
     fr.operation = "FRACT"
-    l.new(mv.outputs[0], fr.inputs[0])
+    l.new(ph.outputs[0], fr.inputs[0])
     ramp = n.new("ShaderNodeValToRGB")
     ramp.color_ramp.interpolation = "CONSTANT"
+    ramp.color_ramp.elements[0].position = 0.0
     ramp.color_ramp.elements[0].color = MAGENTA
     ramp.color_ramp.elements[1].position = 0.34
     ramp.color_ramp.elements[1].color = CYAN
     e2 = ramp.color_ramp.elements.new(0.67)
     e2.color = YELLOW
     l.new(fr.outputs[0], ramp.inputs["Fac"])
+
+    def lane_mask(at):
+        d = n.new("ShaderNodeMath")
+        d.operation = "SUBTRACT"
+        d.inputs[1].default_value = at
+        l.new(sp.outputs["X"], d.inputs[0])
+        a = n.new("ShaderNodeMath")
+        a.operation = "ABSOLUTE"
+        l.new(d.outputs[0], a.inputs[0])
+        m = n.new("ShaderNodeMath")
+        m.operation = "LESS_THAN"
+        m.inputs[1].default_value = 0.010
+        l.new(a.outputs[0], m.inputs[0])
+        return m.outputs[0]
+
+    lanes = n.new("ShaderNodeMath")
+    lanes.operation = "MAXIMUM"
+    l.new(lane_mask(0.34), lanes.inputs[0])
+    l.new(lane_mask(0.66), lanes.inputs[1])
+    ysc = n.new("ShaderNodeMath")
+    ysc.operation = "MULTIPLY"
+    ysc.inputs[1].default_value = 1.4
+    l.new(sp.outputs["Y"], ysc.inputs[0])
+    yf = n.new("ShaderNodeMath")
+    yf.operation = "FRACT"
+    l.new(ysc.outputs[0], yf.inputs[0])
+    dash = n.new("ShaderNodeMath")
+    dash.operation = "LESS_THAN"
+    dash.inputs[1].default_value = 0.38
+    l.new(yf.outputs[0], dash.inputs[0])
+    lane_on = n.new("ShaderNodeMath")
+    lane_on.operation = "MULTIPLY"
+    l.new(lanes.outputs[0], lane_on.inputs[0])
+    l.new(dash.outputs[0], lane_on.inputs[1])
+
+    # The alley (small UV.y) stays almost black. Reflections bloom on the avenue.
+    dim = n.new("ShaderNodeMapRange")
+    dim.clamp = True
+    dim.inputs[1].default_value = 1.4
+    dim.inputs[2].default_value = 3.4
+    dim.inputs[3].default_value = 0.15
+    dim.inputs[4].default_value = 1.0
+    l.new(sp.outputs["Y"], dim.inputs[0])
+    streak = n.new("ShaderNodeMath")
+    streak.operation = "MULTIPLY"
+    l.new(band.outputs["Result"], streak.inputs[0])
+    l.new(dim.outputs["Result"], streak.inputs[1])
+
     base = n.new("ShaderNodeRGB")
-    base.outputs[0].default_value = (0.008, 0.010, 0.020, 1)
-    mix = n.new("ShaderNodeMixRGB")
-    l.new(pw.outputs[0], mix.inputs[0])
-    l.new(base.outputs[0], mix.inputs[1])
-    l.new(ramp.outputs["Color"], mix.inputs[2])
-    _out(nt, mix.outputs["Color"], 0.95)
+    base.outputs[0].default_value = (0.010, 0.012, 0.020, 1)
+    wet = n.new("ShaderNodeMixRGB")
+    l.new(streak.outputs[0], wet.inputs[0])
+    l.new(base.outputs[0], wet.inputs[1])
+    l.new(ramp.outputs["Color"], wet.inputs[2])
+    paint = n.new("ShaderNodeMixRGB")
+    l.new(lane_on.outputs[0], paint.inputs[0])
+    l.new(wet.outputs["Color"], paint.inputs[1])
+    paint.inputs[2].default_value = (0.72, 0.78, 0.86, 1)
+    _out(nt, paint.outputs["Color"], 0.8)
     return mat
 
 
@@ -424,40 +502,39 @@ def _loft(loops):
     return verts, faces
 
 
-def _profile(y, zb, xb, zs, xs, z1, x1, zsh, xsh, zbelt, xbelt, zrail, xrail, zt):
+def _profile(y, zb, xb, zs, xs, zsh, xsh, zt, xt):
+    """Faceted half-section: flat floor, sill, shoulder, roof. Not a blimp."""
     pts = [
         (0.0, zb),
+        (xb * 0.62, zb),
         (xb, zb + 0.015),
         (xs, zs),
-        (x1, z1),
         (xsh, zsh),
-        (xbelt, zbelt),
-        (xrail, zrail),
-        (xrail * 0.45, (zrail * 0.35 + zt * 0.65)),
-        (0.0, zt),
+        (xt, zt),
+        (max(xt * 0.28, 0.0), zt + 0.01),
+        (0.0, zt + 0.015),
     ]
     return _loop_from_half(y, pts)
 
 
 def build_hero(mats):
-    # Tail -> nose. Low nose, cabin set back, haunches over the wheels.
-    # Args: y, zb, xb, zs, xs, z1, x1, zsh, xsh, zbelt, xbelt, zrail, xrail, zt
+    # Tail -> nose. Args: y, zb, xb, zs, xs, zsh, xsh, zt, xt
+    # Long hood, cabin set back, wide haunches. Facets stay readable in ink.
     sections = [
-        _profile(-2.24, 0.24, 0.62, 0.34, 0.86, 0.50, 0.96, 0.64, 0.98, 0.72, 0.78, 0.74, 0.48, 0.76),
-        _profile(-2.02, 0.20, 0.70, 0.30, 0.94, 0.48, 1.02, 0.68, 1.04, 0.80, 0.86, 0.84, 0.58, 0.86),
-        _profile(-1.62, 0.46, 0.52, 0.56, 0.86, 0.68, 1.02, 0.82, 1.06, 0.88, 0.92, 0.90, 0.62, 0.92),
-        _profile(-1.12, 0.15, 0.66, 0.24, 0.96, 0.46, 1.02, 0.74, 1.02, 0.90, 0.80, 0.98, 0.54, 1.02),
-        _profile(-0.40, 0.14, 0.68, 0.22, 0.98, 0.44, 1.02, 0.72, 1.02, 0.92, 0.74, 1.02, 0.50, 1.05),
-        _profile(0.12, 0.14, 0.66, 0.22, 0.97, 0.42, 1.01, 0.70, 1.01, 0.90, 0.74, 1.02, 0.48, 1.05),
-        _profile(0.52, 0.14, 0.62, 0.22, 0.95, 0.40, 1.00, 0.60, 1.00, 0.70, 0.84, 0.82, 0.56, 0.90),
-        _profile(0.92, 0.14, 0.58, 0.22, 0.92, 0.36, 0.98, 0.50, 1.00, 0.54, 0.88, 0.56, 0.62, 0.58),
-        _profile(1.38, 0.40, 0.48, 0.50, 0.82, 0.62, 0.98, 0.76, 1.02, 0.70, 0.84, 0.60, 0.50, 0.58),
-        _profile(1.78, 0.16, 0.50, 0.26, 0.80, 0.38, 0.90, 0.48, 0.92, 0.50, 0.72, 0.48, 0.42, 0.50),
-        _profile(2.08, 0.15, 0.34, 0.22, 0.60, 0.32, 0.72, 0.40, 0.74, 0.42, 0.52, 0.40, 0.28, 0.42),
-        _profile(2.32, 0.17, 0.10, 0.22, 0.26, 0.28, 0.34, 0.32, 0.36, 0.34, 0.22, 0.32, 0.10, 0.33),
+        _profile(-2.30, 0.30, 0.86, 0.46, 0.96, 0.66, 0.90, 0.74, 0.22),
+        _profile(-2.02, 0.20, 0.98, 0.34, 1.06, 0.56, 1.02, 0.64, 0.34),
+        _profile(-1.45, 0.16, 1.02, 0.30, 1.10, 0.50, 1.06, 0.58, 0.38),
+        _profile(-0.72, 0.15, 0.98, 0.28, 1.04, 0.82, 0.96, 1.04, 0.44),
+        _profile(-0.05, 0.15, 0.96, 0.26, 1.02, 0.86, 0.94, 1.08, 0.40),
+        _profile(0.48, 0.15, 0.94, 0.26, 1.00, 0.52, 0.98, 0.62, 0.30),
+        _profile(1.15, 0.16, 0.88, 0.24, 0.94, 0.36, 0.86, 0.40, 0.12),
+        _profile(1.75, 0.17, 0.62, 0.24, 0.74, 0.32, 0.60, 0.34, 0.06),
+        _profile(2.18, 0.18, 0.28, 0.24, 0.36, 0.30, 0.24, 0.31, 0.02),
+        _profile(2.36, 0.20, 0.06, 0.23, 0.10, 0.26, 0.05, 0.28, 0.02),
     ]
     verts, faces = _loft(sections)
     me = new_mesh("HeroBody", verts, faces)
+    shade_flat(me)
     # Open the greenhouse so the camera can pass through glass only.
     bm = bmesh.new()
     bm.from_mesh(me)
@@ -474,10 +551,8 @@ def build_hero(mats):
     for f in bm.faces:
         c = f.calc_center_median()
         x, y, z = abs(c.x), c.y, c.z
-        windshield = (0.38 < y < 1.02 and z > 0.60 and x < 0.70)
-        roof = (-0.22 < y < 0.42 and z > 0.98 and x < 0.48)
-        side = (0.00 < y < 0.55 and 0.64 < z < 0.98 and x > 0.58)
-        if windshield or roof or side:
+        windshield = (0.40 < y < 1.15 and z > 0.55 and x < 0.55)
+        if windshield:
             kill.append(f)
     bmesh.ops.delete(bm, geom=kill, context="FACES")
     bm.to_mesh(me)
@@ -488,23 +563,11 @@ def build_hero(mats):
     # Glass sheets.
     glass_parts = []
     ws = [
-        [(-0.68, 0.96, 0.52), (0.68, 0.96, 0.52)],
-        [(-0.52, 0.60, 0.90), (0.52, 0.60, 0.90)],
-        [(-0.40, 0.32, 1.02), (0.40, 0.32, 1.02)],
+        [(-0.50, 1.02, 0.40), (0.50, 1.02, 0.40)],
+        [(-0.40, 0.62, 0.72), (0.40, 0.62, 0.72)],
+        [(-0.32, 0.32, 0.96), (0.32, 0.32, 0.96)],
     ]
     glass_parts.append(_sheet("Windshield", ws, mats["glass"]))
-    roof = [
-        [(-0.42, 0.30, 1.035), (0.42, 0.30, 1.035)],
-        [(-0.40, 0.02, 1.045), (0.40, 0.02, 1.045)],
-        [(-0.38, -0.24, 1.01), (0.38, -0.24, 1.01)],
-    ]
-    glass_parts.append(_sheet("RoofGlass", roof, mats["glass"]))
-    for sign, x in ((1, 0.86), (-1, -0.86)):
-        side = [
-            [(x, 0.52, 0.66), (x * 0.78, 0.52, 0.98)],
-            [(x, 0.02, 0.64), (x * 0.76, 0.02, 0.98)],
-        ]
-        glass_parts.append(_sheet(f"SideGlass{sign}", side, mats["glass"]))
 
     def part(name, kind, loc, scale, mat, rot=(0, 0, 0), **kw):
         mep = primitive(kind, **kw)
@@ -517,12 +580,12 @@ def build_hero(mats):
 
     # Lights, aero, wheels. Slits sit on the surface, not through the body.
     # Sit the lamps on the nose surface, not inside the volume.
-    part("HL", "cube", (0.15, 2.345, 0.27), (0.11, 0.018, 0.026), mats["cyan"])
-    part("HR", "cube", (-0.15, 2.345, 0.27), (0.11, 0.018, 0.026), mats["cyan"])
-    part("HL2", "cube", (0.52, 2.00, 0.38), (0.20, 0.02, 0.028), mats["cyan"])
-    part("HR2", "cube", (-0.52, 2.00, 0.38), (0.20, 0.02, 0.028), mats["cyan"])
-    part("Tail", "cube", (0.0, -2.27, 0.58), (1.78, 0.022, 0.05), mats["magenta"])
-    part("TailC", "cube", (0.0, -2.27, 0.44), (1.15, 0.018, 0.016), mats["cyan"])
+    part("HL", "cube", (0.22, 2.22, 0.30), (0.16, 0.03, 0.035), mats["cyan"])
+    part("HR", "cube", (-0.22, 2.22, 0.30), (0.16, 0.03, 0.035), mats["cyan"])
+    part("HL2", "cube", (0.48, 1.85, 0.34), (0.28, 0.025, 0.03), mats["cyan"])
+    part("HR2", "cube", (-0.48, 1.85, 0.34), (0.28, 0.025, 0.03), mats["cyan"])
+    part("Tail", "cube", (0.0, -2.32, 0.52), (1.70, 0.03, 0.055), mats["magenta"])
+    part("TailC", "cube", (0.0, -2.32, 0.40), (1.05, 0.02, 0.018), mats["cyan"])
     part("Split", "cube", (0.0, 2.20, 0.13), (1.15, 0.22, 0.018), mats["ink"])
     part("SkirtL", "cube", (0.98, -0.15, 0.18), (0.045, 1.15, 0.06), mats["ink"])
     part("SkirtR", "cube", (-0.98, -0.15, 0.18), (0.045, 1.15, 0.06), mats["ink"])
@@ -548,10 +611,10 @@ def build_hero(mats):
 
     wheels = []
     for name, x, y, z, radius in (
-        ("FL", 0.88, 1.40, 0.34, 0.34),
-        ("FR", -0.88, 1.40, 0.34, 0.34),
-        ("RL", 0.92, -1.58, 0.36, 0.36),
-        ("RR", -0.92, -1.58, 0.36, 0.36),
+        ("FL", 0.98, 1.28, 0.34, 0.34),
+        ("FR", -0.98, 1.28, 0.34, 0.34),
+        ("RL", 1.02, -1.48, 0.36, 0.36),
+        ("RR", -1.02, -1.48, 0.36, 0.36),
     ):
         root = bpy.data.objects.new(name, None)
         link(root)
@@ -600,13 +663,6 @@ def build_hero(mats):
         jt.rotation_euler = (math.radians(-90), 0, 0)
         jt.scale = (0.01, 0.01, 0.01)
         jets.append(jt)
-    # Headlight beams.
-    for i, x in enumerate((0.5, -0.5)):
-        beam = ob_from_mesh(f"Beam{i}", primitive("cone", r=0.18, d=2.4, seg=8), mats["beam"])
-        beam.parent = body
-        beam.location = (x * 0.75, 3.15, 0.36)
-        beam.rotation_euler = (math.radians(-90), 0, 0)
-
     return {"body": body, "wheels": wheels, "flames": flames, "jets": jets, "glass": glass_parts, "holo": holo}
 
 
@@ -640,7 +696,7 @@ def _ink_shell(obj, mat, thickness):
 # ---------------------------------------------------------------------------
 
 def build_police(mats, font):
-    """One hierarchy. Call again with shared meshes via copy."""
+    """A readable cruiser: white body, black glass, roof lightbar, 警."""
     root = bpy.data.objects.new("Police", None)
     link(root)
     root.empty_display_size = 0.2
@@ -653,34 +709,32 @@ def build_police(mats, font):
         o.rotation_euler = rot
         return o
 
-    body = box("PBody", (0, 0, 0.72), (1.85, 4.7, 0.85), mats["police"])
-    _ink_shell(body, mats["ink"], 0.02)
-    box("PCab", (0, 0.15, 1.28), (1.6, 2.3, 0.55), mats["police"])
-    glass = box("PGlass", (0, 0.35, 1.32), (1.45, 1.7, 0.42), mats["glass"])
-    box("PStripe", (0, 0, 0.55), (1.88, 4.72, 0.08), mats["cyan_dim"])
-    # Lightbar.
-    box("Bar", (0, 0.15, 1.78), (0.55, 1.45, 0.16), mats["ink"])
-    for i, x in enumerate(np.linspace(-0.55, 0.55, 5)):
+    body = box("PBody", (0, 0, 0.58), (1.9, 4.9, 0.62), mats["police"])
+    _ink_shell(body, mats["ink"], 0.025)
+    box("Hood", (0, 1.15, 0.92), (1.72, 1.7, 0.16), mats["police"])
+    box("Trunk", (0, -1.55, 0.90), (1.75, 1.15, 0.16), mats["police"])
+    cab = box("PCab", (0, -0.15, 1.18), (1.62, 2.05, 0.48), mats["police"])
+    _ink_shell(cab, mats["ink"], 0.02)
+    box("PGlass", (0, -0.05, 1.22), (1.48, 1.55, 0.34), mats["police_dark"])
+    box("PStripe", (0, 0.05, 0.78), (1.98, 4.4, 0.07), mats["navy"])
+    # Lightbar runs across the roof so it reads from the front and the chase.
+    box("Bar", (0, -0.05, 1.52), (1.40, 0.36, 0.10), mats["ink"])
+    for i, x in enumerate(np.linspace(-0.48, 0.48, 4)):
         mat = mats["red"] if i % 2 == 0 else mats["blue"]
-        box(f"LB{i}", (x, 0.15, 1.86), (0.18, 0.24, 0.09), mat)
-    # Push bumper.
-    box("Push", (0, 2.45, 0.45), (1.7, 0.12, 0.28), mats["ink"])
-    # Wheels.
-    for (x, y) in ((0.82, 1.45), (-0.82, 1.45), (0.82, -1.45), (-0.82, -1.45)):
-        w = ob_from_mesh("PW", primitive("cyl", r=0.34, d=0.22, seg=12), mats["tire"])
+        box(f"LB{i}", (x, -0.05, 1.64), (0.28, 0.22, 0.10), mat)
+    box("Push", (0, 2.52, 0.42), (1.75, 0.10, 0.22), mats["ink"])
+    for (x, y) in ((0.95, 1.55), (-0.95, 1.55), (0.95, -1.55), (-0.95, -1.55)):
+        w = ob_from_mesh("PW", primitive("cyl", r=0.36, d=0.24, seg=14), mats["tire"])
         w.parent = root
-        w.location = (x, y, 0.34)
+        w.location = (x, y, 0.36)
         w.rotation_euler = (0, math.radians(90), 0)
-    # 警 on the door and hood.
-    badge = text_mesh("警", font, 0.78, 0.025)
+    badge = text_mesh("警", font, 1.05, 0.04)
     for i, loc, rot in (
-        (0, (0.94, 0.15, 0.85), (math.radians(90), 0, math.radians(90))),
-        (1, (-0.94, 0.15, 0.85), (math.radians(90), 0, math.radians(-90))),
-        (2, (0.0, 1.55, 0.95), (0, 0, 0)),
-        # Rear face, so a chase view reads the character.
-        (3, (0.0, -2.45, 0.95), (math.radians(90), 0, 0)),
+        (0, (0.98, -0.15, 0.78), (math.radians(90), 0, math.radians(90))),
+        (1, (-0.98, -0.15, 0.78), (math.radians(90), 0, math.radians(-90))),
+        (3, (0.0, -2.50, 0.78), (math.radians(90), 0, 0)),
     ):
-        o = ob_from_mesh(f"Jing{i}", badge, mats["ink"])
+        o = ob_from_mesh(f"Jing{i}", badge, mats["yellow"])
         o.parent = root
         o.location = loc
         o.rotation_euler = rot
@@ -743,10 +797,14 @@ def build_heli(mats, font):
         blade.rotation_euler = (0, 0, k * math.pi / 2)
     disc = ob_from_mesh("RotorDisc", primitive("cyl", r=5.1, d=0.02, seg=24), mats["disc"])
     disc.parent = rotor
-    # Searchlight cone hangs under the nose, aimed down.
-    cone = ob_from_mesh("Search", primitive("cone", r=2.2, d=18.0, seg=12), mats["search"])
-    cone.parent = root
-    cone.location = (0.0, 1.4, -9.0)
+    # The lamp itself. The pool on the asphalt is a separate disc, baked in world space,
+    # so it never becomes a solid cone in front of the camera.
+    part("Lamp", "cyl", (0, 1.15, -0.72), (0.32, 0.32, 0.16), mats["yellow"], r=1, d=1, seg=12)
+    cone = ob_from_mesh(
+        "Search",
+        primitive("cyl", r=1.0, d=0.04, seg=24),
+        soft_emit("Pool", (1.0, 0.93, 0.62, 1), 1.1, 0.28),
+    )
     badge = text_mesh("警", font, 0.4, 0.02)
     o = ob_from_mesh("HJing", badge, mats["yellow"])
     o.parent = root
@@ -865,16 +923,16 @@ def window_mat(name="Bldg"):
     # FRACT takes one input; wire it explicitly.
     fu = n.new("ShaderNodeMath")
     fu.operation = "FRACT"
-    l.new(math_node("MULTIPLY", udot.outputs["Value"], bval=0.42), fu.inputs[0])
+    l.new(math_node("MULTIPLY", udot.outputs["Value"], bval=1.05), fu.inputs[0])
     fv = n.new("ShaderNodeMath")
     fv.operation = "FRACT"
-    l.new(math_node("MULTIPLY", psep.outputs["Z"], bval=0.30), fv.inputs[0])
+    l.new(math_node("MULTIPLY", psep.outputs["Z"], bval=0.72), fv.inputs[0])
     cu = n.new("ShaderNodeMath")
     cu.operation = "FLOOR"
-    l.new(math_node("MULTIPLY", udot.outputs["Value"], bval=0.42), cu.inputs[0])
+    l.new(math_node("MULTIPLY", udot.outputs["Value"], bval=1.05), cu.inputs[0])
     cv = n.new("ShaderNodeMath")
     cv.operation = "FLOOR"
-    l.new(math_node("MULTIPLY", psep.outputs["Z"], bval=0.30), cv.inputs[0])
+    l.new(math_node("MULTIPLY", psep.outputs["Z"], bval=0.72), cv.inputs[0])
 
     # hash = fract(sin(cx * 12.9898 + cz * 78.233) * 43758.5453)
     hx = n.new("ShaderNodeMath")
@@ -916,8 +974,8 @@ def window_mat(name="Bldg"):
         l.new(lt.outputs[0], both.inputs[1])
         return both.outputs[0]
 
-    in_u = away(fu, 0.16)
-    in_v = away(fv, 0.18)
+    in_u = away(fu, 0.28)
+    in_v = away(fv, 0.30)
     inside = n.new("ShaderNodeMath")
     inside.operation = "MULTIPLY"
     l.new(in_u, inside.inputs[0])
@@ -996,8 +1054,8 @@ def window_mat(name="Bldg"):
 
 def make_mats():
     mats = {
-        "body": toon("Body", (0.05, 0.055, 0.075, 1), (0.015, 0.018, 0.028, 1),
-                     (0.32, 0.36, 0.48, 1), CYAN, MAGENTA, halftone=False),
+        "body": toon("Body", (0.045, 0.05, 0.065, 1), (0.012, 0.014, 0.02, 1),
+                     (0.14, 0.16, 0.20, 1), (0.07, 0.08, 0.10, 1), (0.04, 0.045, 0.06, 1)),
         "ink": emission("Ink", INK, 1.0),
         # Strength stays near 1 so the hue survives the display transform.
         "cyan": emission("Cyan", CYAN, 1.65),
@@ -1011,16 +1069,17 @@ def make_mats():
         "tire": toon("Tire", (0.02, 0.02, 0.025, 1), (0.0, 0.0, 0.0, 1),
                      (0.08, 0.08, 0.09, 1), (0.02, 0.02, 0.03, 1), (0.02, 0.02, 0.03, 1)),
         "rim": emission("Rim", (0.16, 0.17, 0.20, 1), 1.0),
-        "police": toon("Police", (0.93, 0.95, 0.97, 1), (0.62, 0.66, 0.74, 1),
-                       (1, 1, 1, 1), (0.1, 0.3, 0.8, 1), (0.8, 0.1, 0.15, 1), halftone=False),
+        "police": emission("Police", (0.78, 0.80, 0.84, 1), 0.95),
+        "police_dark": emission("PoliceDark", (0.04, 0.05, 0.08, 1), 0.9),
+        "navy": emission("Navy", (0.12, 0.28, 0.95, 1), 1.15),
         "heli": toon("Heli", (0.05, 0.08, 0.16, 1), (0.02, 0.03, 0.06, 1),
                      (0.25, 0.32, 0.5, 1), CYAN, YELLOW, halftone=True),
         "road": road_mat(),
         "holo": apply_blend(emission("Holo", CYAN, 2.2)),
-        "fire_y": emission("FireY", YELLOW, 4.5),
-        "fire_m": emission("FireM", MAGENTA, 4.0),
-        "fire_c": emission("FireC", CYAN, 3.6),
-        "fire_p": emission("FireP", PURPLE, 3.2),
+        "fire_y": emission("FireY", YELLOW, 1.7),
+        "fire_m": emission("FireM", MAGENTA, 1.55),
+        "fire_c": emission("FireC", CYAN, 1.45),
+        "fire_p": emission("FireP", PURPLE, 1.35),
         "smoke": apply_blend(emission("Smoke", (0.08, 0.07, 0.12, 1), 1.2)),
         "beam": soft_emit("Beam", (0.45, 0.95, 1.0, 1), 1.3, 0.10),
         "search": soft_emit("Search", (1.0, 0.97, 0.82, 1), 1.6, 0.08),
@@ -1124,7 +1183,7 @@ def build_city(data, mats, font, images):
     signs = ["龍門", "夜雨", "永樂", "雲吞", "酒吧", "藥房", "霓虹", "通宵", "金龍", "冰室", "電玩", "麵館", "旅店", "發財", "夜色", "星河"]
     sign_i = 0
     bill_i = 0
-    plane = primitive("plane")
+    plane = uv_plane()
     while s < min(1180.0, data["s_edge"] - 30):
         # Keep the intersection clear.
         if abs(s - data["s_tank"]) < 22 or abs(s - data["s_bar"]) < 14:
@@ -1151,9 +1210,12 @@ def build_city(data, mats, font, images):
                 col = [mats["magenta"], mats["cyan"], mats["yellow"], mats["purple"]][sign_i % 4]
                 so = ob_from_mesh(f"Sign{sign_i}", me, col)
                 so.location = Vector(p + r * side * (half + 0.6) + np.array([0, 0, 6 + (sign_i % 4) * 3.5]))
-                # Face the street.
                 normal = -r * side
                 so.rotation_euler = _align_z(normal, f)
+                plate = ob_from_mesh(f"SignPlate{sign_i}", plane, mats["ink"])
+                plate.location = so.location - Vector(normal) * 0.08
+                plate.rotation_euler = so.rotation_euler
+                plate.scale = (2.4, 0.7, 1)
                 sign_i += 1
             if rng.random() < 0.45 and bill_i < len(images) * 2:
                 img = images[bill_i % len(images)]
@@ -1223,7 +1285,7 @@ def build_screen(data, mats, face_mat):
     root.location = Vector(p + np.array([0, 0, 4.6]))
     yaw = math.atan2(f[0], f[1])
     root.rotation_euler = (0, 0, yaw)
-    panel = ob_from_mesh("ScreenPanel", primitive("plane"), face_mat)
+    panel = ob_from_mesh("ScreenPanel", uv_plane(), face_mat)
     panel.parent = root
     panel.scale = (14.0, 8.0, 1)
     panel.rotation_euler = (math.radians(90), 0, 0)
@@ -1633,16 +1695,54 @@ def bake(data, hero, cops, heli, rain, screen, barricade, pads, slabs):
             }},
         )
 
-    # Searchlight only while the helicopter is actually in the chase.
-    beam_on = [
-        1.0 if (T.T_CHOPPER - 0.35) <= data["t"][i] <= (T.T_BARRICADE + 0.5) else 0.001
-        for i in range(T.N)
-    ]
+    # Searchlight pool rides the wet road under the helicopter, not a volume cone.
+    pool = heli["search"]
+    pool_loc = np.zeros((T.N, 3))
+    px, py = [], []
+    for i in range(T.N):
+        on = (T.T_CHOPPER - 0.35) <= data["t"][i] <= (T.T_BARRICADE + 0.5)
+        p = data["hero_pos"][i] + data["hero_fwd"][i] * 9.0
+        p = p + np.array([0.0, 0.0, 0.12 - data["hero_pos"][i][2] + data["hero_pos"][i][2]])
+        p[2] = data["hero_pos"][i][2] + 0.18
+        pool_loc[i] = p
+        px.append(4.2 if on else 0.001)
+        py.append(2.2 if on else 0.001)
     bake_curves(
-        heli["search"], frames,
-        {"scale": {0: beam_on, 1: beam_on, 2: beam_on}},
+        pool, frames,
+        {
+            "location": {0: pool_loc[:, 0], 1: pool_loc[:, 1], 2: pool_loc[:, 2]},
+            "scale": {0: px, 1: py, 2: [1.0] * T.N},
+        },
         interpolation="CONSTANT",
     )
+
+    # Cabin props stay hidden until the camera is on the glass.
+    for name in ("Shoulder", "Helmet", "Visor"):
+        bit = bpy.data.objects.get(name)
+        if bit is None:
+            continue
+        base = bit.scale.copy()
+        sx, sy, sz = [], [], []
+        for i in range(T.N):
+            g = 1.0 if data["t"][i] >= T.T_GLASS_IN - 0.2 else 0.001
+            sx.append(base.x * g)
+            sy.append(base.y * g)
+            sz.append(base.z * g)
+        bake_curves(bit, frames, {"scale": {0: sx, 1: sy, 2: sz}}, interpolation="CONSTANT")
+
+    # Headlamps stay dark until the car lights itself in the alley.
+    for name in ("HL", "HR", "HL2", "HR2"):
+        lamp = bpy.data.objects.get(name)
+        if lamp is None:
+            continue
+        base = lamp.scale.copy()
+        sx, sy, sz = [], [], []
+        for i in range(T.N):
+            g = 1.0 if data["t"][i] >= 0.45 else 0.001
+            sx.append(base.x * g)
+            sy.append(base.y * g)
+            sz.append(base.z * g)
+        bake_curves(lamp, frames, {"scale": {0: sx, 1: sy, 2: sz}}, interpolation="CONSTANT")
 
     # Screen smash: hide the panel on the hit, keep the frame as broken scale.
     panel = screen
@@ -1739,9 +1839,12 @@ def add_fireball(name, origin, frame, mats, big=True):
     frames = list(range(1, T.N + 1))
     count = 8 if big else 5
     for k in range(count):
-        me = primitive("uv", u=8, v=6)
+        me = primitive("uv", u=6, v=4)
+        shade_flat(me)
         mat = colors[k % len(colors)]
         o = ob_from_mesh(f"{name}{k}", me, mat)
+        if k < 3:
+            _ink_shell(o, mats["ink"], 0.06)
         o.location = Vector(origin)
         life = 32 if k < 5 else 70
         direction = np.array([rng.uniform(-1, 1), rng.uniform(-1, 1), rng.uniform(0.2, 1.4)])
@@ -1755,7 +1858,7 @@ def add_fireball(name, origin, frame, mats, big=True):
             else:
                 u = (i - frame) / life
                 pop = math.sin(min(0.18 + u * 2.4, 1.0) * math.pi)
-                rad = (4.5 if big else 2.2) * (1.3 if k < 2 else 0.8) * pop
+                rad = (2.6 if big else 1.1) * (1.15 if k < 2 else 0.7) * pop
                 drift = direction * (u * (6 if k < 5 else 3))
                 drift[2] += u * (2.0 if k < 5 else 5.0)
                 locs.append(origin + drift)
@@ -1812,7 +1915,6 @@ def add_shards(origin, forward, right, up, frame, mats, face_mat):
 
 
 def add_traffic(data, mats):
-    cube = primitive("cube")
     colors = [mats["magenta"], mats["cyan"], mats["yellow"], mats["purple"], mats["police"]]
     frames = list(range(1, T.N + 1))
     rng = random.Random(5)
@@ -1820,8 +1922,16 @@ def add_traffic(data, mats):
         lane = rng.choice([-6.2, -3.2, 3.2, 6.2])
         s0 = rng.uniform(180, 900)
         speed = rng.uniform(8, 14)
-        root = ob_from_mesh(f"Car{n}", cube, colors[n % len(colors)])
-        root.scale = (1.7, 4.2, 1.3)
+        root = bpy.data.objects.new(f"Car{n}", None)
+        link(root)
+        body = ob_from_mesh(f"CarBody{n}", primitive("cube"), colors[n % len(colors)])
+        body.parent = root
+        body.location = (0, 0, 0.45)
+        body.scale = (1.7, 4.3, 0.7)
+        cab = ob_from_mesh(f"CarCab{n}", primitive("cube"), mats["police_dark"])
+        cab.parent = root
+        cab.location = (0, -0.2, 1.05)
+        cab.scale = (1.45, 1.8, 0.5)
         locs = np.zeros((T.N, 3))
         qu = []
         prev = None
@@ -1909,8 +2019,6 @@ def main():
     fall_i = int(round(T.T_COPS_FALL * T.FPS))
     add_fireball("CurlBoom", data["cop_c"]["pos"][fall_i] + np.array([0, 0, 1.2]), fall_i, mats, big=True)
     # Small tire-hit burst on the landing, local.
-    drop_i = int(round(T.T_DROP * T.FPS))
-    add_fireball("Land", data["hero_pos"][drop_i] + np.array([0, 0, 0.2]), drop_i, mats, big=False)
     scr_i = int(round(T.T_SCREEN * T.FPS))
     p, f, r, u = sample_road(data, data["s_screen"] + 1.4)
     add_shards(p + np.array([0, 0, 4.5]), f, r, u, scr_i, mats, images[0])
@@ -1920,7 +2028,7 @@ def main():
     os.makedirs(SHOT_DIR, exist_ok=True)
     os.makedirs(FRAME_DIR, exist_ok=True)
     if mode == "preview":
-        times = [0.5, 7.6, 12.55, 13.72, 18.5, 25.2, 28.4, 32.08, 36.57, 43.5, 52.6, 57.4, 59.5, 62.2]
+        times = [0.8, 7.2, 12.4, 13.8, 25.2, 28.6, 32.1, 52.6, 57.6, 60.2]
         for tt in times:
             frame = T.nearest_frame(tt)
             scene.frame_set(frame)

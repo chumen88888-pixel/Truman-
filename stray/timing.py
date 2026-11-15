@@ -223,9 +223,9 @@ def _frames(pos: np.ndarray):
 
 def road_width(s: float) -> float:
     if s < 70:
-        return 8.2
+        return 6.6
     if s < 120:
-        return 8.2 + (18.5 - 8.2) * _smooth(70, 120, s)
+        return 6.6 + (18.5 - 6.6) * _smooth(70, 120, s)
     if s < 1280:
         return 18.5
     if s < 1500:
@@ -299,14 +299,13 @@ def _cam_pose(t: float):
     keys = [
         # t, x, y, z, lookx, looky, lookz, fov
         # Whole car in frame, alley and the blockade readable down the bore.
-        # Whole car low in frame; the alley runs away in front of it.
-        (0.00, -0.55, -10.4, 2.05, 0.0, 12.0, 0.7, 34.0),
-        (T_REV1, -0.45, -10.0, 2.1, 0.0, 13.0, 0.75, 33.0),
-        (T_REV2, -0.3, -9.8, 2.25, 0.0, 14.0, 0.85, 32.0),
-        # Stay back so the hero and both cruisers share the frame.
-        (T_COPS - 0.15, -0.25, -11.2, 3.05, 0.0, 9.0, 0.95, 38.0),
-        (T_COPS + 0.55, -0.15, -10.6, 3.35, 0.0, 8.5, 1.05, 36.0),
-        (T_FLOOR, -1.1, -10.0, 2.45, 0.0, 7.0, 0.85, 38.0),
+        # High enough to read the whole car, then the two cruisers across the alley.
+        (0.00, -2.4, -13.5, 3.6, 0.0, 6.5, 0.85, 42.0),
+        (T_REV1, -1.6, -12.2, 3.3, 0.0, 8.0, 0.9, 38.0),
+        (T_REV2, -0.9, -11.2, 3.05, 0.0, 9.0, 0.9, 34.0),
+        (T_COPS - 0.15, -0.8, -14.0, 5.1, 0.0, 5.5, 1.35, 46.0),
+        (T_COPS + 0.55, -0.4, -12.6, 4.6, 0.0, 6.5, 1.25, 40.0),
+        (T_FLOOR, -1.4, -11.2, 3.4, 0.0, 6.0, 0.95, 40.0),
         (T_LAUNCH1, -1.8, -9.2, 3.3, 0.0, 3.5, 1.8, 44.0),
         (T_DROP, -2.4, -11.0, 4.6, 0.1, 4.5, 0.7, 48.0),
         # Wide enough to hold the tanker, the blast, and the car in the air.
@@ -568,7 +567,7 @@ def _cops(t, s, road_pos, fwd, right, up, edge_i, hero_fwd):
             off_s[i] = s_block
             # Slide in from the right, stopped by T_COPS.
             slide = _smooth(T_COPS - 1.05, T_COPS, t[i])
-            off_x[i] = 14.0 * (1.0 - slide) + 1.6 * slide
+            off_x[i] = 14.0 * (1.0 - slide) + 2.2 * slide
         elif t[i] < T_BOOM:
             off_s[i] = s[i] - 9.0
             off_x[i] = 3.4
@@ -582,9 +581,9 @@ def _cops(t, s, road_pos, fwd, right, up, edge_i, hero_fwd):
     off_x = np.zeros(n)
     for i in range(n):
         if t[i] < T_DROP + 0.25:
-            off_s[i] = s_block - 2.4
+            off_s[i] = s_block
             slide = _smooth(T_COPS - 1.05, T_COPS + 0.1, t[i])
-            off_x[i] = -16.0 * (1.0 - slide) - 1.8 * slide
+            off_x[i] = -16.0 * (1.0 - slide) - 2.2 * slide
         else:
             off_s[i] = min(s[i] - 16.0, s[min(i, edge_i)] - 8.0)
             # After the tanker, move to a clear lane.
